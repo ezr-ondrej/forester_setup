@@ -1,0 +1,110 @@
+---
+- name: Setup forester with libvirt
+  hosts: localhost
+  gather_facts: yes
+
+  vars:
+    pg_image: quay.io/fedora/postgresql-15
+    pg_username: forester
+    _postgresql_password_: forester
+    pg_database: forester
+    forester_http_port: 8280
+    forester_controller_image: quay.io/forester/controller:latest
+
+  tasks:
+    - name: Install libvirt
+      become: yes
+      ansible.builtin.package:
+        name:
+          - libvirt
+          - libvirt-daemon-kvm
+          - python3-libvirt
+          - python3-lxml
+        state: present
+
+    - name: Disable authentication for libvirt over tcp
+      become: yes
+      community.general.ini_file:
+        path: /etc/libvirt/libvirtd.conf
+        option: auth_tcp
+        value: '"none"'
+    
+    - name: Enable libvirt service with tcp socket
+      become: yes
+      ansible.builtin.service:
+        name: libvirtd-tcp.socket
+        state: started
+        enabled: true
+    
+    # We want to route tftp to 6969 so we do not need root to run the container
+    - name: firewalld forward UDP port 69 to 6969 in the libvirt zone
+      become: yes
+      ansible.posix.firewalld:
+        port_forward:
+          - port: 69
+            proto: udp
+            toport: 6969
+        zone: libvirt
+        state: enabled
+
+    - name: Prepare podman volumes for forester
+      containers.podman.podman_volume:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - forester-pg
+        - forester-img
+        - forester-log
+    
+    - name: Prepare forester pod
+      containers.podman.podman_pod:
+        name: forester
+        state: started
+        ports:
+          - "{{ forester_http_port }}:8000"
+          - "6969:6969/udp"
+    
+    - name: Start forester postgres database container
+      containers.podman.podman_container:
+        name: forester-pg
+        image: "{{ pg_image }}"
+        pod: forester
+        state: started
+        env:
+          POSTGRESQL_USER: "{{ pg_username }}"
+          POSTGRESQL_PASSWORD: "{{ _postgresql_password_ }}"
+          POSTGRESQL_DATABASE: "{{ pg_database }}"
+        volume:
+          - forester-pg:/var/lib/pgsql/data:Z
+
+    - name: Wait for the dabase to be ready
+      containers.podman.podman_container_exec:
+        name: forester-pg
+        command: "pg_isready -d {{ pg_database }}"
+      retries: 5
+      delay: 3
+      register: forester_pg_ready
+      until: forester_pg_ready.rc == 0
+
+    - debug:
+        var: forester_pg_ready
+    
+    - name: Start podman forester controller
+      containers.podman.podman_container:
+        name: forester-api
+        image: "{{ forester_controller_image }}"
+        pod: forester
+        state: started
+        env:
+          DATABASE_USER: "{{ pg_username }}"
+          DATABASE_PASSWORD: "{{ _postgresql_password_ }}"
+          # POSTGRESQL_DATABASE: "{{ pg_database }}"
+          APP_HOSTNAME: "192.168.122.1"
+          APP_BASE_URL: "http://192.168.122.1:{{ forester_http_port }}"
+        volume:
+          - forester-img:/images:Z
+          - forester-log:/logs:Z
+    
+    
+
+  
