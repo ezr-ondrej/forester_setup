@@ -28,16 +28,16 @@
         path: /etc/libvirt/libvirtd.conf
         option: auth_tcp
         value: '"none"'
-    
+
     - name: Enable libvirt service with tcp socket
       become: yes
       ansible.builtin.service:
         name: libvirtd-tcp.socket
         state: started
         enabled: true
-    
+
     # We want to route tftp to 6969 so we do not need root to run the container
-    - name: firewalld forward UDP port 69 to 6969 in the libvirt zone
+    - name: Set firewalld rule to forward UDP port 69 to 6969 in the libvirt zone
       become: yes
       ansible.posix.firewalld:
         port_forward:
@@ -45,6 +45,14 @@
             proto: udp
             toport: 6969
         zone: libvirt
+        permanent: true
+        state: enabled
+
+    - name: Enable firewalld traffic on forester port in libvirt zone
+      ansible.posix.firewalld:
+        port: "{{ forester_http_port }}/tcp"
+        zone: libvirt
+        permanent: true
         state: enabled
 
     - name: Prepare podman volumes for forester
@@ -55,7 +63,7 @@
         - forester-pg
         - forester-img
         - forester-log
-    
+
     - name: Prepare forester pod
       containers.podman.podman_pod:
         name: forester
@@ -63,7 +71,7 @@
         ports:
           - "{{ forester_http_port }}:8000"
           - "6969:6969/udp"
-    
+
     - name: Start forester postgres database container
       containers.podman.podman_container:
         name: forester-pg
@@ -86,9 +94,6 @@
       register: forester_pg_ready
       until: forester_pg_ready.rc == 0
 
-    - debug:
-        var: forester_pg_ready
-    
     - name: Start podman forester controller
       containers.podman.podman_container:
         name: forester-api
@@ -104,7 +109,3 @@
         volume:
           - forester-img:/images:Z
           - forester-log:/logs:Z
-    
-    
-
-  
