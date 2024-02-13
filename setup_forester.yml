@@ -36,18 +36,6 @@
         state: started
         enabled: true
 
-    # We want to route tftp to 6969 so we do not need root to run the container
-    - name: Set firewalld rule to forward UDP port 69 to 6969 in the libvirt zone
-      become: yes
-      ansible.posix.firewalld:
-        port_forward:
-          - port: 69
-            proto: udp
-            toport: 6969
-        zone: libvirt
-        permanent: true
-        state: enabled
-
     - name: Enable firewalld traffic on forester port in libvirt zone
       ansible.posix.firewalld:
         port: "{{ forester_http_port }}/tcp"
@@ -56,6 +44,7 @@
         state: enabled
 
     - name: Prepare podman volumes for forester
+      become: yes
       containers.podman.podman_volume:
         name: "{{ item }}"
         state: present
@@ -65,14 +54,17 @@
         - forester-log
 
     - name: Prepare forester pod
+      become: yes
       containers.podman.podman_pod:
         name: forester
         state: started
+        # network: host
         ports:
           - "{{ forester_http_port }}:8000"
-          - "6969:6969/udp"
+          - "69:6969/udp"
 
     - name: Start forester postgres database container
+      become: yes
       containers.podman.podman_container:
         name: forester-pg
         image: "{{ pg_image }}"
@@ -86,6 +78,7 @@
           - forester-pg:/var/lib/pgsql/data:Z
 
     - name: Wait for the dabase to be ready
+      become: yes
       containers.podman.podman_container_exec:
         name: forester-pg
         command: "pg_isready -d {{ pg_database }}"
@@ -95,6 +88,7 @@
       until: forester_pg_ready.rc == 0
 
     - name: Start podman forester controller
+      become: yes
       containers.podman.podman_container:
         name: forester-api
         image: "{{ forester_controller_image }}"
