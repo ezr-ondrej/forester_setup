@@ -43,8 +43,15 @@
         permanent: true
         state: enabled
 
-    - name: Prepare podman volumes for forester
+    - name: Prepare forester tftp proxy
       become: yes
+      containers.podman.podman_container:
+        name: forester-proxy
+        network: host
+        image: quay.io/forester/controller:latest
+        command: "/forester-proxy --debug --url http://127.0.0.1:{{ forester_http_port }}"
+
+    - name: Prepare podman volumes for forester
       containers.podman.podman_volume:
         name: "{{ item }}"
         state: present
@@ -54,17 +61,13 @@
         - forester-log
 
     - name: Prepare forester pod
-      become: yes
       containers.podman.podman_pod:
         name: forester
         state: started
-        # network: host
         ports:
-          - "{{ forester_http_port }}:8000"
-          - "69:6969/udp"
+          - "{{ forester_http_port }}:{{ forester_http_port }}"
 
     - name: Start forester postgres database container
-      become: yes
       containers.podman.podman_container:
         name: forester-pg
         image: "{{ pg_image }}"
@@ -78,7 +81,6 @@
           - forester-pg:/var/lib/pgsql/data:Z
 
     - name: Wait for the dabase to be ready
-      become: yes
       containers.podman.podman_container_exec:
         name: forester-pg
         command: "pg_isready -d {{ pg_database }}"
@@ -88,7 +90,6 @@
       until: forester_pg_ready.rc == 0
 
     - name: Start podman forester controller
-      become: yes
       containers.podman.podman_container:
         name: forester-api
         image: "{{ forester_controller_image }}"
@@ -99,6 +100,7 @@
           DATABASE_PASSWORD: "{{ _postgresql_password_ }}"
           # POSTGRESQL_DATABASE: "{{ pg_database }}"
           APP_HOSTNAME: "192.168.122.1"
+          APP_PORT: "{{ forester_http_port }}"
           APP_BASE_URL: "http://192.168.122.1:{{ forester_http_port }}"
         volume:
           - forester-img:/images:Z
